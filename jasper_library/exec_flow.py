@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 
 import os
+import shutil
 import sys
 import logging
 from argparse import ArgumentParser
@@ -13,10 +14,16 @@ def shell_source(script):
     settings some environment variables. Here is a way to do it."""
     import subprocess
     import os
-    pipe = subprocess.Popen(". %s > /dev/null; env" % script,
+    if os.name == "nt":
+        pipe = subprocess.Popen(". %s > NUL && set" % script, 
                             stdout=subprocess.PIPE, shell=True)
-    output = pipe.communicate()[0]
-    env = dict((line.split("=", 1) for line in output.splitlines()))
+        output = pipe.communicate()[0]
+        env = dict((line.decode().split("=", 1) for line in output.splitlines()))
+    else:
+        pipe = subprocess.Popen(". %s > /dev/null; env" % script,
+                            stdout=subprocess.PIPE, shell=True)
+        output = pipe.communicate()[0]
+        env = dict((line.split("=", 1) for line in output.splitlines()))
     os.environ.update(env)
 
 if __name__ == '__main__':
@@ -113,7 +120,7 @@ if __name__ == '__main__':
     # if we don't have the environment set up, source the default config file
     if 'XILINX_PATH' not in list(sorted(os.environ.keys())):
         this_file_path = os.path.realpath(__file__)
-        config_file_path = os.path.join(os.path.dirname(os.path.dirname(this_file_path)), 'vivado_config.local')
+        config_file_path = os.path.join(os.path.dirname(os.path.dirname(this_file_path)), 'vivado_config.local.bat' if os.name == 'nt' else 'vivado.config.local')
         if os.path.exists(config_file_path):
             shell_source(config_file_path)
 
@@ -122,11 +129,12 @@ if __name__ == '__main__':
     builddir = opts.builddir or opts.model[:-4]
 
     # logging stuff...
-    os.system('mkdir -p %s' % builddir)
+    os.makedirs(builddir, exist_ok=True)
+    # os.system('mkdir -p %s' % builddir) # Linux specific
     logger = logging.getLogger('jasper')
     logger.setLevel(logging.DEBUG)
 
-    handler = logging.FileHandler('%s/jasper.log' % builddir, mode='w')
+    handler = logging.FileHandler(os.path.join(builddir, 'jasper.log'), mode='w')
     handler.setLevel(logging.DEBUG)
     logformat = logging.Formatter('%(levelname)s - %(asctime)s - %(name)s - '
                                 '%(message)s')
@@ -146,7 +154,7 @@ if __name__ == '__main__':
         fh.write('!outputs/\n')
 
     if opts.be == 'vivado':
-        os.environ['SYSGEN_SCRIPT'] = os.environ['MLIB_DEVEL_PATH'] + '/startsg'
+        os.environ['SYSGEN_SCRIPT'] = os.path.join(os.environ['MLIB_DEVEL_PATH'], 'startsg.bat' if os.name == 'nt' else 'startsg')
 
         if opts.synth_strat is not None:
             # Check if the Strategy specified exists/is known
@@ -184,7 +192,7 @@ if __name__ == '__main__':
         logger.debug('Vivado compile will be executed.')
 
     if opts.be == 'ise':
-        os.environ['SYSGEN_SCRIPT'] = os.environ['MLIB_DEVEL_PATH'] + '/startsg_ise'
+        os.environ['SYSGEN_SCRIPT'] = os.path.join(os.environ['MLIB_DEVEL_PATH'], 'startsg_ise')
         logger.debug('ISE compile will be executed.')
 
     if opts.sysgen != '':
@@ -214,7 +222,7 @@ if __name__ == '__main__':
         tf.write_core_info()
         tf.write_core_jam_info()
         tf.constraints_rule_check()
-        tf.dump_castro(tf.compile_dir+'/castro.yml')
+        tf.dump_castro(os.path.join(tf.compile_dir,'castro.yml'))
 
 
     if opts.backend or opts.software:
@@ -232,7 +240,7 @@ if __name__ == '__main__':
             backend = toolflow.VivadoBackend(plat=platform,
                                             compile_dir=tf.compile_dir,
                                             periph_objs=tf.periph_objs)
-            backend.import_from_castro(backend.compile_dir + '/castro.yml')
+            backend.import_from_castro(os.path.join(backend.compile_dir, 'castro.yml'))
             backend.initialize()
 
             # launch vivado via the generated .tcl file
@@ -245,7 +253,7 @@ if __name__ == '__main__':
             # False = Non-Project Mode). Not used in ISE.
             platform.project_mode = opts.nonprojectmode
             backend = toolflow.ISEBackend(plat=platform, compile_dir=tf.compile_dir)
-            backend.import_from_castro(backend.compile_dir + '/castro.yml')
+            backend.import_from_castro(os.path.join(backend.compile_dir, 'castro.yml'))
             backend.initialize()
             # launch ISE via the generated .tcl file
             backend.compile()
@@ -257,7 +265,7 @@ if __name__ == '__main__':
             platform.project_mode = opts.nonprojectmode
             backend = toolflow.VivadoBackend(plat=platform,
                                             compile_dir=tf.compile_dir)
-            backend.import_from_castro(backend.compile_dir + '/castro.yml')
+            backend.import_from_castro(os.path.join(backend.compile_dir, 'castro.yml'))
             backend.initialize()
             # launch vivado via the generated .tcl file
             backend.compile(cores=opts.jobs, plat=platform,
@@ -310,8 +318,10 @@ if __name__ == '__main__':
                 backend.output_bof += '_%d-%02d-%02d_%02d%02d.bof' % (
                     tf.start_time.tm_year, tf.start_time.tm_mon, tf.start_time.tm_mday,
                     tf.start_time.tm_hour, tf.start_time.tm_min)
-                os.system('cp %s %s/top.bin' % (binary, backend.compile_dir))
-                os.system('cp %s %s/top.bit' % (bit_file, backend.compile_dir))
+                shutil.copy(binary, os.path.join(backend.compile_dir, "top.bin"))
+                shutil.copy(bit_file, os.path.join(backend.compile_dir, "top.bit"))
+                #os.system('cp %s %s/top.bin' % (binary, backend.compile_dir)) # POSIX SPECIFIC
+                #os.system('cp %s %s/top.bit' % (bit_file, backend.compile_dir)) # POSIX SPECIFIC
                 if platform.name.startswith("au"):
                    backend.mkfpg(bitstream, backend.output_fpg)
                 else:
@@ -320,18 +330,22 @@ if __name__ == '__main__':
 
             # Only generate the hex and mcs files if a golden image or multiboot image
             if platform.boot_image == 'golden' or platform.boot_image == 'multiboot':
-                os.system('cp %s %s/%s' % (
-                    binary, backend.output_dir, backend.output_bin))
-                os.system('cp %s %s/%s' % (
-                    hex_file, backend.output_dir, backend.output_hex))
-                os.system('cp %s %s/%s' % (
-                    mcs_file, backend.output_dir, backend.output_mcs))
-                os.system('cp %s %s/%s' % (
-                    prm_file, backend.output_dir, backend.output_prm))
-                print('Created bin file: %s/%s' % (backend.output_dir, backend.output_bin))
-                print('Created hex file: %s/%s' % (backend.output_dir, backend.output_hex))
-                print('Created mcs file: %s/%s' % (backend.output_dir, backend.output_mcs))
-                print('Created prm file: %s/%s' % (backend.output_dir, backend.output_prm))
+                shutil.copy(binary, os.path.join(backend.output_dir, backend.output_bin))
+                #os.system('cp %s %s/%s' % (
+                    #binary, backend.output_dir, backend.output_bin)) # POSIX SPECIFIC
+                shutil.copy(hex_file, os.path.join(backend.output_dir, backend.output_hex))
+                #os.system('cp %s %s/%s' % (
+                    #hex_file, backend.output_dir, backend.output_hex)) # POSIX SPECIFIC
+                shutil.copy(mcs_file, os.path.join(backend.output_dir, backend.output_mcs))
+                #os.system('cp %s %s/%s' % (
+                    #mcs_file, backend.output_dir, backend.output_mcs)) # POSIX SPECIFIC
+                shutil.copy(prm_file, os.path.join(backend.output_dir, backend.output_prm))
+                #os.system('cp %s %s/%s' % (
+                    #prm_file, backend.output_dir, backend.output_prm)) # POSIX SPECIFIC
+                print('Created bin file: %s/%s' % (backend.output_dir, backend.output_bin)) # POSIX SPECIFIC
+                print('Created hex file: %s/%s' % (backend.output_dir, backend.output_hex)) # POSIX SPECIFIC
+                print('Created mcs file: %s/%s' % (backend.output_dir, backend.output_mcs)) # POSIX SPECIFIC
+                print('Created prm file: %s/%s' % (backend.output_dir, backend.output_prm)) # POSIX SPECIFIC
 
     # end
 

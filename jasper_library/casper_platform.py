@@ -14,8 +14,8 @@ class Platform(object):
         scraping details from a yaml configuration file called
         <MLIB_DEVEL_PATH>/jasper_library/platforms/name.yaml
         """
-        platdir = os.environ['MLIB_DEVEL_PATH'] + '/jasper_library/platforms'
-        conffile = platdir + '/%s.yaml' % name.lower()
+        platdir = os.path.join(os.environ['MLIB_DEVEL_PATH'], 'jasper_library', 'platforms')
+        conffile = os.path.join(platdir, '%s.yaml' % name.lower())
         print(conffile)
         if not os.path.isfile(conffile):
             raise RuntimeError('Couldn\'t find platform configuration file '
