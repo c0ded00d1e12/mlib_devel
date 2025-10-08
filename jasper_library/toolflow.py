@@ -26,6 +26,7 @@ import csv      # read core_info.tab to populate device tree nodes in VitisBacke
 # For xml2vhdl generation from Oxford
 import xml.dom.minidom
 import xml.etree.ElementTree as ET
+import cit2csl
 
 #JH: I don't know what this is, but I suspect here is a better place for it than constraints.py
 MAX_IMAGE_CHUNK_SIZE = 1988
@@ -72,8 +73,8 @@ class Toolflow(object):
         self.output_dir = self.compile_dir + '/outputs'
 
         self.logger.info('Setting compile directory: %s' % self.compile_dir)
-        os.system('mkdir -p %s' % self.compile_dir)
-        os.system('mkdir -p %s' % self.output_dir)
+        os.makedirs(self.compile_dir, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
 
         # compile parameters which can be set straight away
         self.start_time = time.localtime()
@@ -588,16 +589,20 @@ class Toolflow(object):
             fh.write(s)
         # generate the binary and xilinx-style .mem versions of this table,
         # using Python script [TODO convert to a callable function?].
-        ret = os.system('python -E %s/jasper_library/cit2csl.py -b %s > %s.bin' % (os.getenv('MLIB_DEVEL_PATH'), newfile, newfile))
-        if ret != 0:
+        try {
+            ret = cit2csl.make_file(choose_bin=True, cit_file=newfile, f"newfile.bin")
+        } except {
             errmsg = 'Failed to generate binary file {}.bin, error code {}.'.format(newfile,ret)
             self.logger.error(errmsg)
             raise Exception(errmsg)
-        ret = os.system('python -E %s/jasper_library/cit2csl.py %s > %s.mem' % (os.getenv('MLIB_DEVEL_PATH'), newfile, newfile))
-        if ret != 0:
+        }
+        try {
+            ret = cit2csl.make_file(choose_bin=False, cit_file=newfile, f"newfile.mem")
+        } except {
             errmsg = 'Failed to generate xilinx-style file {}.mem, error code {}.'.format(newfile,ret)
             self.logger.error(errmsg)
             raise Exception(errmsg)
+        }
 
     def regenerate_top(self):
         """
@@ -1306,6 +1311,8 @@ class ToolflowBackend(object):
 
         # copy binary file from binary file location and rename to system.bin
         mkfpg_cmd1 = 'cp %s %s/system.bin' % (filename_bin, self.compile_dir)
+	# TODO
+        cmd = ["cp", filename_bin, f"{self.compile_dir}/system.bin"]
         os.system(mkfpg_cmd1)
         # compress binary file in new location
         mkfpg_cmd2 = 'gzip -c %s/system.bin > %s/system.bin.gz' % (
@@ -2654,9 +2661,17 @@ class ISEBackend(VivadoBackend):
         tcl_file = self.compile_dir+'/gogogo.tcl'
         helpers.write_file(tcl_file, self.tcl_cmd)
         # os.system('vivado -mode batch -source %s'%(tcl_file))
-        os.system('planAhead -jou %s/planahead.jou -log %s/planahead.log '
-                  '-mode tcl -source %s' % (self.compile_dir,
-                                            self.compile_dir, tcl_file))
+        term_cmd = os.getenv('VIVADO_PATH')
+        cmd = [term_cmd,
+               "-mode", "batch",
+               "-jou", f"{self.compile_dir}/vivado_output.jou",
+               "-log", f"{self.compile_dir}/vivado_output.log",
+               "-source", tcl_file
+               ]
+
+        #os.system('planAhead -jou %s/planahead.jou -log %s/planahead.log '
+                  #'-mode tcl -source %s' % (self.compile_dir,
+                                            #self.compile_dir, tcl_file))
 
     @staticmethod
     def format_const(attribute, val, port, index=None):

@@ -35,91 +35,113 @@ import fileinput
 
 import argparse
 
-parser = argparse.ArgumentParser(description='Convert core_info.tab to CSL form.', prog=os.path.basename(__file__))
-parser.add_argument('-a', '--address', action='store',
-                    default=0x1f000, type=lambda x: int(x,0),
-                    help='Starting address for memory file')
-parser.add_argument('-b', '--bin', action='store_true',
-                    help='Output binary file rather than memory file')
-parser.add_argument('cit_file', nargs='?', default=None,
-                    help='A core_info.tab file')
-args = parser.parse_args()
-#print args; sys.exit()
+def make_data(address=0x1f000, choose_bin=False, cit_file=None):
+    lines = []
+    with fileinput.input(files(cit_file)) as f:
+        # Read and parse lines
+        # Lines have 4 or 5 fields: dev mode offset length [typecode]
+        for line in f:
+            words = line.split()
+            dev = words[0]
+            mode = words[1]
+            offset = int(words[2], 16)
+            if mode == '1':
+                offset |= 1
+            length = int(words[3], 16)
+            if len(words) < 5:
+                # Missing type defaults to 0 (register)
+                typecode = 0
+            else:
+                typecode = int(words[4], 16)
+          
+            lines.append([dev, [offset, length, typecode]])
 
-# Munge sys.argv so fileutil will be happy
-sys.argv = [sys.argv[0]]
-if args.cit_file:
-    sys.argv.append(args.cit_file)
-#print sys.argv; sys.exit()
+    # Sort lines
+    lines.sort()
 
+    payload_length = 9
+    csl = b''
+    prev = ''
 
+    for (dev, entry) in lines:
+        reuse = min(len(prev), len(dev))
+        for i in range(reuse):
+            if prev[i] != dev[i]:
+                reuse = i
+                break
 
-# Read and parse lines
-# Lines have 4 or 5 fields: dev mode offset length [typecode]
-lines = []
-for line in fileinput.input():
-    words = line.split()
-    dev = words[0]
-    mode = words[1]
-    offset = int(words[2], 16)
-    if mode == '1':
-        offset |= 1
-    length = int(words[3], 16)
-    if len(words) < 5:
-        # Missing type defaults to 0 (register)
-        typecode = 0
+        tail = dev[reuse:]
+        if len(csl) == 0:
+            reuse = payload_length
+
+        #print(reuse, len(tail), tail, entry, dev)
+        csl += struct.pack('>BB%dsIIB' % len(tail), reuse, len(tail), tail.encode('utf-8'), *entry)
+
+        prev = dev
+
+    # Append list terminator
+    csl += b'\0\0'
+
+    # Prepend length
+    csl = struct.pack('>H', len(csl)) + csl
+    return csl
+
+def make_file(address, choose_bin, cit_file, output_file):
+    csl = make_data(address, choose_bin, cit_file)
+    with open(output_file, "wb") as f:
+        if choose_bin:
+            # Output CSL as binary
+            output_file.write(csl)
+        else:
+            # Output CSL as memory
+            output_file('@%08X\n' % address)
+            # Pad csl with 3 nul bytes (is this really necessary?)
+            csl += b'\0\0\0'
+            # Split csl into lines of 1 to 32 bytes, rounding up the number of lines
+            n_lines = (len(csl) + 31) // 32
+            for line_n in range(n_lines):
+                try:
+                    line = csl[32*line_n : 32*(line_n+1)]
+                except IndexError:
+                    line = csl[32*line_n : ]
+            
+                #sys.stderr.writelines(len(line))
+                output_file.write('   ')
+                for byte in line:
+                    output_file.write(' %02X' % byte)
+                output_file.write('\n')
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Convert core_info.tab to CSL form.', prog=os.path.basename(__file__))
+    parser.add_argument('-a', '--address', action='store',
+                        default=0x1f000, type=lambda x: int(x,0),
+                        help='Starting address for memory file')
+    parser.add_argument('-b', '--bin', action='store_true',
+                        help='Output binary file rather than memory file')
+    parser.add_argument('cit_file', nargs='?', default=None,
+                        help='A core_info.tab file')
+    args = parser.parse_args()
+
+    csl = make_data(args.address, args.bin, args.cit_file)
+    if choose_bin:
+        # Output CSL as binary
+        sys.stdout.buffer.write(csl)
     else:
-        typecode = int(words[4], 16)
-  
-    lines.append([dev, [offset, length, typecode]])
+        # Output CSL as memory file
+        print(('@%08X' % address))
+        # Pad csl with 3 nul bytes (is this really necessary?)
+        csl += b'\0\0\0'
+        # Split csl into lines of 1 to 32 bytes, rounding up the number of lines
+        n_lines = (len(csl) + 31) // 32
+        for line_n in range(n_lines):
+            try:
+                line = csl[32*line_n : 32*(line_n+1)]
+            except IndexError:
+                line = csl[32*line_n : ]
+        
+            #sys.stderr.writelines(len(line))
+            sys.stdout.write('   ')
+            for byte in line:
+                sys.stdout.write(' %02X' % byte)
+            sys.stdout.write('\n')
 
-# Sort lines
-lines.sort()
-
-payload_length = 9
-csl = b''
-prev = ''
-
-for (dev, entry) in lines:
-    reuse = min(len(prev), len(dev))
-    for i in range(reuse):
-        if prev[i] != dev[i]:
-            reuse = i
-            break
-
-    tail = dev[reuse:]
-    if len(csl) == 0:
-        reuse = payload_length
-
-    #print(reuse, len(tail), tail, entry, dev)
-    csl += struct.pack('>BB%dsIIB' % len(tail), reuse, len(tail), tail.encode('utf-8'), *entry)
-
-    prev = dev
-
-# Append list terminator
-csl += b'\0\0'
-
-# Prepend length
-csl = struct.pack('>H', len(csl)) + csl
-
-if args.bin:
-    # Output CSL as binary
-    sys.stdout.buffer.write(csl)
-else:
-    # Output CSL as memory file
-    print(('@%08X' % args.address))
-    # Pad csl with 3 nul bytes (is this really necessary?)
-    csl += b'\0\0\0'
-    # Split csl into lines of 1 to 32 bytes, rounding up the number of lines
-    n_lines = (len(csl) + 31) // 32
-    for line_n in range(n_lines):
-        try:
-            line = csl[32*line_n : 32*(line_n+1)]
-        except IndexError:
-            line = csl[32*line_n : ]
-    
-        #sys.stderr.writelines(len(line))
-        sys.stdout.write('   ')
-        for byte in line:
-            sys.stdout.write(' %02X' % byte)
-        sys.stdout.write('\n')
